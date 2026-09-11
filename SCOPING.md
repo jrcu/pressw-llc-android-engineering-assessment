@@ -19,6 +19,7 @@
 
 <b>Assumptions made:</b>
 1. We are assuming that answering "No medical, dietary, or therapeutic advice" as stated by Diane falls under the 6th requirement as stated above.
+2. We are assuming the "under 2 seconds" response time requirement is measured as time-to-first-token (when streaming starts), not full completion time. This also reconciles it with Marcus being fine with a longer response time to ensure quality — the two are compatible if the 2s figure is about perceived responsiveness rather than total generation time.
 
 <b>Risks accepted:</b>
 1. Due to amount of time the response must come we are accepting the risk of answers not being optimized for the conversation such as correctness.

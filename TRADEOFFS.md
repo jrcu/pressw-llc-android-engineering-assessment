@@ -1,0 +1,2 @@
+<b>Known issues or unhandled cases:</b>
+1. Equipment awareness relies on model judgment, not a hard rule. `/api/chatbot` tells the model to ask about cookware only when it decides equipment matters for the answer, rather than enforcing that check in code. This avoids nagging on unrelated questions (e.g. "what can I substitute for buttermilk?"), but for an edge case that doesn't obviously read as equipment-heavy (e.g. a recipe needing a stand mixer), the model could occasionally give a suggestion without asking first.
