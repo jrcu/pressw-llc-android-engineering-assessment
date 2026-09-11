@@ -8,5 +8,7 @@ data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: Role,
     val content: String,
-    val isError: Boolean = false,
+    // Set on a USER message when sending it failed — the caller couldn't
+    // reach the backend or got an error back. Drives the "Try again" caption.
+    val failed: Boolean = false,
 )

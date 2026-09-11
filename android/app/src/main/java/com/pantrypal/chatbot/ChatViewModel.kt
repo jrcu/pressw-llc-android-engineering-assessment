@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.pantrypal.chatbot.data.ChatMessage
 import com.pantrypal.chatbot.data.ChatRepository
 import com.pantrypal.chatbot.data.Role
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,27 +46,65 @@ class ChatViewModel(
 
         val historyForRequest = _uiState.value.messages
         val userMessage = ChatMessage(role = Role.USER, content = text)
+
+        _uiState.update {
+            it.copy(
+                messages = it.messages + userMessage,
+                inputText = "",
+            )
+        }
+
+        dispatch(userMessage, historyForRequest)
+    }
+
+    /**
+     * Resends a message that previously failed, without re-adding it to the
+     * message list — [userMessageId] must already be present. Its failed
+     * caption ("Unable to send message. Try again") triggers this.
+     */
+    fun retryMessage(userMessageId: String) {
+        if (_uiState.value.isSending) return
+
+        val messages = _uiState.value.messages
+        val index = messages.indexOfFirst { it.id == userMessageId }
+        if (index == -1) return
+
+        val userMessage = messages[index]
+        val historyForRequest = messages.subList(0, index).toList()
+
+        _uiState.update { state ->
+            state.copy(
+                messages = state.messages.map { m ->
+                    if (m.id == userMessageId) m.copy(failed = false) else m
+                },
+            )
+        }
+
+        dispatch(userMessage, historyForRequest)
+    }
+
+    private fun dispatch(userMessage: ChatMessage, historyForRequest: List<ChatMessage>) {
         val assistantMessage = ChatMessage(role = Role.ASSISTANT, content = "")
 
         _uiState.update {
             it.copy(
-                messages = it.messages + userMessage + assistantMessage,
-                inputText = "",
+                messages = it.messages + assistantMessage,
                 isSending = true,
             )
         }
 
         viewModelScope.launch {
             try {
-                repository.sendMessage(text, historyForRequest).collect { chunk ->
+                repository.sendMessage(userMessage.content, historyForRequest).collect { chunk ->
                     appendToMessage(assistantMessage.id, chunk)
                 }
+            } catch (e: CancellationException) {
+                // Not a failure — e.g. the ViewModel was cleared mid-request.
+                // Rethrow so structured concurrency can actually cancel us;
+                // catching this below would swallow cancellation silently.
+                throw e
             } catch (e: Exception) {
-                replaceMessage(
-                    assistantMessage.id,
-                    content = e.message ?: "Something went wrong. Please try again.",
-                    isError = true,
-                )
+                markFailed(userMessage.id, assistantMessage.id)
             } finally {
                 _uiState.update { it.copy(isSending = false) }
             }
@@ -82,15 +121,14 @@ class ChatViewModel(
         }
     }
 
-    private fun replaceMessage(id: String, content: String, isError: Boolean) {
+    // Drops the (incomplete) assistant placeholder and flags the user's
+    // message as failed so the UI can show a "Try again" caption under it.
+    private fun markFailed(userMessageId: String, assistantMessageId: String) {
         _uiState.update { state ->
             state.copy(
-                messages = state.messages.map { m ->
-                    if (m.id != id) return@map m
-                    // Keep any partial answer that streamed in before the failure.
-                    val newContent = if (m.content.isBlank()) content else "${m.content}\n\n$content"
-                    m.copy(content = newContent, isError = isError)
-                },
+                messages = state.messages
+                    .filterNot { it.id == assistantMessageId }
+                    .map { m -> if (m.id == userMessageId) m.copy(failed = true) else m },
             )
         }
     }

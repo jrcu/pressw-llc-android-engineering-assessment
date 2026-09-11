@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -45,12 +46,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -70,7 +75,7 @@ import com.pantrypal.chatbot.ui.theme.PantryPalTheme
  */
 private val ChatMessageListSaver: Saver<List<ChatMessage>, ArrayList<ArrayList<Any>>> = Saver(
     save = { messages ->
-        ArrayList(messages.map { arrayListOf<Any>(it.id, it.role.name, it.content, it.isError) })
+        ArrayList(messages.map { arrayListOf<Any>(it.id, it.role.name, it.content, it.failed) })
     },
     restore = { saved ->
         saved.map { fields ->
@@ -78,7 +83,7 @@ private val ChatMessageListSaver: Saver<List<ChatMessage>, ArrayList<ArrayList<A
                 id = fields[0] as String,
                 role = Role.valueOf(fields[1] as String),
                 content = fields[2] as String,
-                isError = fields[3] as Boolean,
+                failed = fields[3] as Boolean,
             )
         }
     },
@@ -110,6 +115,12 @@ fun ChatScreen(
 
     Scaffold(
         modifier = modifier,
+        // Scaffold's default contentWindowInsets (safeDrawing) would already
+        // reserve nav-bar/IME space in innerPadding below — MessageInputBar
+        // applies that padding itself instead (see its own imePadding() /
+        // navigationBarsPadding()), so opt out here to avoid double-counting
+        // it and leaving a dead gap under the input bar.
+        contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
                 title = { Text("PantryPal") },
@@ -124,6 +135,7 @@ fun ChatScreen(
             uiState = uiState,
             onInputChange = viewModel::onInputChange,
             onSend = viewModel::sendMessage,
+            onRetry = viewModel::retryMessage,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
@@ -136,6 +148,7 @@ private fun ChatContent(
     uiState: ChatUiState,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
+    onRetry: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
@@ -145,6 +158,7 @@ private fun ChatContent(
             MessageList(
                 messages = uiState.messages,
                 isSending = uiState.isSending,
+                onRetry = onRetry,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -173,6 +187,7 @@ private fun EmptyState(modifier: Modifier = Modifier) {
 private fun MessageList(
     messages: List<ChatMessage>,
     isSending: Boolean,
+    onRetry: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -192,57 +207,86 @@ private fun MessageList(
         items(messages, key = { it.id }) { message ->
             val isPendingAssistantReply =
                 message.role == Role.ASSISTANT && message.content.isBlank() && isSending
-            MessageBubble(message = message, isThinking = isPendingAssistantReply)
+            MessageBubble(
+                message = message,
+                isThinking = isPendingAssistantReply,
+                onRetry = { onRetry(message.id) },
+            )
         }
     }
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, isThinking: Boolean) {
+private fun MessageBubble(message: ChatMessage, isThinking: Boolean, onRetry: () -> Unit) {
     val isUser = message.role == Role.USER
-    val backgroundColor = when {
-        message.isError -> MaterialTheme.colorScheme.errorContainer
-        isUser -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    val contentColor = when {
-        message.isError -> MaterialTheme.colorScheme.onErrorContainer
-        isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val backgroundColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val contentColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
-        Surface(
-            color = backgroundColor,
-            contentColor = contentColor,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.widthIn(max = 300.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         ) {
-            if (isThinking) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = contentColor,
+            Surface(
+                color = backgroundColor,
+                contentColor = contentColor,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.widthIn(max = 300.dp),
+            ) {
+                if (isThinking) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = contentColor,
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text("Thinking…", style = MaterialTheme.typography.bodyMedium, fontStyle = FontStyle.Italic)
+                    }
+                } else {
+                    Text(
+                        text = remember(message.content) { message.content.toBoldAnnotatedString() },
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     )
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Text("Thinking…", style = MaterialTheme.typography.bodyMedium, fontStyle = FontStyle.Italic)
                 }
-            } else {
-                Text(
-                    text = remember(message.content) { message.content.toBoldAnnotatedString() },
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                )
+            }
+        }
+        if (isUser && message.failed) {
+            FailedMessageCaption(onRetry = onRetry, modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp))
+        }
+    }
+}
+
+@Composable
+private fun FailedMessageCaption(onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    val text = remember(onRetry) {
+        buildAnnotatedString {
+            append("Unable to send message. ")
+            withLink(
+                LinkAnnotation.Clickable(
+                    tag = "retry",
+                    styles = TextLinkStyles(style = SpanStyle(textDecoration = TextDecoration.Underline)),
+                ) {
+                    onRetry()
+                },
+            ) {
+                append("Try again")
             }
         }
     }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = modifier,
+    )
 }
 
 // The backend's model output uses markdown-style **bold** for emphasis (see
@@ -270,16 +314,18 @@ private fun MessageInputBar(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
 ) {
+    // Padding for the IME/nav bar goes on the Row, not this Surface, so the
+    // surface's background still fills all the way to the true screen edge
+    // (behind the nav bar / gesture pill) instead of leaving a dead gap.
     Surface(
         tonalElevation = 3.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .imePadding()
-            .navigationBarsPadding(),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -334,10 +380,12 @@ private fun ChatContentPreview() {
                         role = Role.ASSISTANT,
                         content = "You could make a quick chicken and rice skillet with whatever vegetables you have on hand.",
                     ),
+                    ChatMessage(role = Role.USER, content = "What about something spicier?", failed = true),
                 ),
             ),
             onInputChange = {},
             onSend = {},
+            onRetry = {},
         )
     }
 }
