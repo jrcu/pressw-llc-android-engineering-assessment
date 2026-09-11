@@ -6,3 +6,4 @@
 5. I wish I could have added unit testing, a better ui as well.
 6. More robust testing on pasting things that should not be.
 7. Optimization of cost of model vs accurate info from the backend.
+8. Make url configurable so it can be changed easily for emulator vs physical device.
